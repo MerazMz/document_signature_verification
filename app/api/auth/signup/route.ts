@@ -57,7 +57,11 @@ export async function POST(request: Request) {
         path: "/",
       });
 
-      return NextResponse.json({ success: true, message: "Account created successfully" });
+      return NextResponse.json({
+        success: true,
+        userId,
+        message: "Account created successfully",
+      });
     } finally {
       client.release();
     }

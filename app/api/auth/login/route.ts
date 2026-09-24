@@ -59,7 +59,12 @@ export async function POST(request: Request) {
         path: "/",
       });
 
-      return NextResponse.json({ success: true, message: "Logged in successfully" });
+      return NextResponse.json({
+        success: true,
+        userId: user.id,
+        user: { id: user.id, name: user.name, email: user.email },
+        message: "Logged in successfully",
+      });
     } finally {
       client.release();
     }
