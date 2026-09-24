@@ -32,6 +32,7 @@ export default function DocumentSignaturePage() {
   useEffect(() => {
     const savedTheme = localStorage.getItem("docsign_theme") as "dark" | "light" | null;
     if (savedTheme === "dark" || savedTheme === "light") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTheme(savedTheme);
     }
   }, []);
