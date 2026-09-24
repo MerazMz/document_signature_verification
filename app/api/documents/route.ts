@@ -68,10 +68,20 @@ export async function POST(request: Request) {
       document,
     });
   } catch (error: unknown) {
-    console.error("Error creating document:", error);
+    const err = error as Error & { code?: string; existingDocument?: unknown };
+    const isDuplicate = err.code === "DOCUMENT_ALREADY_EXISTS";
+
+    if (!isDuplicate) {
+      console.error("Error creating document:", error);
+    }
+
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to create document" },
-      { status: 500 }
+      {
+        error: err.message || "Failed to create document",
+        alreadyExists: isDuplicate,
+        existingDocument: err.existingDocument || null,
+      },
+      { status: isDuplicate ? 409 : 500 }
     );
   }
 }

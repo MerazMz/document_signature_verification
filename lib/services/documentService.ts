@@ -99,7 +99,25 @@ export async function createDocumentWithSigners(input: CreateDocumentInput) {
   try {
     await client.query("BEGIN");
 
-    // 1. Insert document record
+    // 1. Check if document with identical SHA-256 hash was already uploaded by this user
+    const existingDoc = await client.query(
+      `SELECT id, title, file_name, created_at, status
+       FROM documents
+       WHERE owner_id = $1 AND LOWER(document_hash) = LOWER($2)`,
+      [input.ownerId, input.documentHash.trim().toLowerCase()]
+    );
+
+    if (existingDoc.rows.length > 0) {
+      const doc = existingDoc.rows[0];
+      const err = new Error(
+        `Document already exists: A document with this identical SHA-256 hash has already been uploaded by your account ("${doc.title || doc.file_name}").`
+      );
+      (err as Error & { code?: string; existingDocument?: unknown }).code = "DOCUMENT_ALREADY_EXISTS";
+      (err as Error & { code?: string; existingDocument?: unknown }).existingDocument = doc;
+      throw err;
+    }
+
+    // 2. Insert document record
     const docRes = await client.query(
       `INSERT INTO documents
        (owner_id, title, file_name, file_size, file_data, document_hash, status)

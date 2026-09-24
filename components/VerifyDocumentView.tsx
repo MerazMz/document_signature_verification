@@ -3,11 +3,20 @@
 import React, { useState, useRef } from "react";
 import { VerificationReport } from "@/lib/services/verificationService";
 import { arrayBufferToBase64 } from "@/lib/crypto";
+import WorkflowStepper, { WorkflowStep } from "./WorkflowStepper";
 
 interface VerifyDocumentViewProps {
   theme: "dark" | "light";
   initialDocumentId?: number;
 }
+
+const VERIFY_WORKFLOW_STEPS: WorkflowStep[] = [
+  { id: "read", label: "Reading Document", sublabel: "Extracting binary buffer" },
+  { id: "hash", label: "Generating SHA-256", sublabel: "Computing digest" },
+  { id: "registry", label: "Registry Lookup", sublabel: "Locating document" },
+  { id: "signatures", label: "ECDSA Verification", sublabel: "Checking public keys" },
+  { id: "audit", label: "Audit Integrity", sublabel: "Genesis hash chain" },
+];
 
 export default function VerifyDocumentView({
   theme,
@@ -26,19 +35,49 @@ export default function VerifyDocumentView({
   const [error, setError] = useState<string | null>(null);
   const [copiedHash, setCopiedHash] = useState(false);
 
+  // Workflow Checkpoint Stepper State
+  const [verifyState, setVerifyState] = useState<{
+    active: boolean;
+    currentStep: number;
+    isComplete: boolean;
+    isError: boolean;
+    errorMessage?: string;
+  }>({
+    active: false,
+    currentStep: 0,
+    isComplete: false,
+    isError: false,
+  });
+
   const handleVerify = async (selectedFile?: File) => {
     setError(null);
     setIsLoading(true);
+    setReport(null);
 
     const targetFile = selectedFile || file;
 
+    setVerifyState({
+      active: true,
+      currentStep: 0,
+      isComplete: false,
+      isError: false,
+    });
+
     try {
+      // Step 0: Reading Document
+      await new Promise((r) => setTimeout(r, 200));
       let fileBase64: string | undefined;
       if (targetFile) {
         const buffer = await targetFile.arrayBuffer();
         fileBase64 = arrayBufferToBase64(buffer);
       }
 
+      // Step 1: Generating SHA-256
+      setVerifyState((prev) => ({ ...prev, currentStep: 1 }));
+      await new Promise((r) => setTimeout(r, 240));
+
+      // Step 2: Registry Lookup
+      setVerifyState((prev) => ({ ...prev, currentStep: 2 }));
       const res = await fetch("/api/documents/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -54,10 +93,30 @@ export default function VerifyDocumentView({
         throw new Error(data.error || "Failed to verify document");
       }
 
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Step 3: ECDSA Verification
+      setVerifyState((prev) => ({ ...prev, currentStep: 3 }));
+      await new Promise((r) => setTimeout(r, 240));
+
+      // Step 4: Audit Integrity
+      setVerifyState((prev) => ({ ...prev, currentStep: 4 }));
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Step Complete
+      setVerifyState((prev) => ({ ...prev, currentStep: 4, isComplete: true }));
+      await new Promise((r) => setTimeout(r, 220));
+
       setReport(data.report);
     } catch (err: unknown) {
       console.error("Verification failed:", err);
-      setError(err instanceof Error ? err.message : "Verification failed");
+      const msg = err instanceof Error ? err.message : "Verification failed";
+      setError(msg);
+      setVerifyState((prev) => ({
+        ...prev,
+        isError: true,
+        errorMessage: msg,
+      }));
     } finally {
       setIsLoading(false);
     }
@@ -104,8 +163,22 @@ export default function VerifyDocumentView({
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
+      {/* Workflow Checkpoint Animation Pipeline */}
+      {verifyState.active && (
+        <WorkflowStepper
+          steps={VERIFY_WORKFLOW_STEPS}
+          currentStepIndex={verifyState.currentStep}
+          isComplete={verifyState.isComplete}
+          isError={verifyState.isError}
+          errorMessage={verifyState.errorMessage}
+          theme={theme}
+          title="Cryptographic Verification Pipeline"
+          subtitle="Verifying document bytes, SHA-256 hash match, ECDSA P-256 signatures, and tamper-evident audit trail"
+        />
+      )}
+
       {/* Error display */}
-      {error && (
+      {error && !verifyState.active && (
         <div
           className={`p-4 rounded-xl border text-xs flex items-center justify-between ${
             isDark
@@ -120,7 +193,7 @@ export default function VerifyDocumentView({
         </div>
       )}
 
-      {/* If Report is not yet generated, show Input Selector */}
+      {/* If Report is not yet generated and not loading, show Input Selector */}
       {!report ? (
         <div
           className={`p-6 sm:p-8 rounded-2xl border transition-all space-y-6 ${
@@ -432,6 +505,13 @@ export default function VerifyDocumentView({
               onClick={() => {
                 setReport(null);
                 setFile(null);
+                setError(null);
+                setVerifyState({
+                  active: false,
+                  currentStep: 0,
+                  isComplete: false,
+                  isError: false,
+                });
               }}
               className="text-xs underline text-[#8C8C8C] hover:text-inherit cursor-pointer"
             >

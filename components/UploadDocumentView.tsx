@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import { computeDocumentHash, arrayBufferToBase64 } from "@/lib/crypto";
+import WorkflowStepper, { WorkflowStep } from "./WorkflowStepper";
 
 interface UserOption {
   id: number;
@@ -15,6 +16,20 @@ interface UploadDocumentViewProps {
   theme: "dark" | "light";
   onSuccess: (documentId: number) => void;
 }
+
+const UPLOAD_PROCESS_STEPS: WorkflowStep[] = [
+  { id: "read", label: "Uploading Document", sublabel: "Reading binary stream" },
+  { id: "hash", label: "Generating Hash", sublabel: "SHA-256 computation" },
+  { id: "registry", label: "Registry Check", sublabel: "Duplicate detection" },
+  { id: "ready", label: "Hash Verified", sublabel: "Ready for signing" },
+];
+
+const SUBMIT_PROCESS_STEPS: WorkflowStep[] = [
+  { id: "payload", label: "Packaging Payload", sublabel: "Base64 encoding" },
+  { id: "register", label: "Registering Document", sublabel: "Database transaction" },
+  { id: "audit", label: "Genesis Audit Chain", sublabel: "Cryptographic hash block" },
+  { id: "complete", label: "Document Created", sublabel: "Ready for signing" },
+];
 
 export default function UploadDocumentView({
   currentUserId,
@@ -31,7 +46,27 @@ export default function UploadDocumentView({
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [existingDocId, setExistingDocId] = useState<number | null>(null);
   const [copiedHash, setCopiedHash] = useState(false);
+
+  // Workflow Checkpoint Animation State
+  const [workflowState, setWorkflowState] = useState<{
+    active: boolean;
+    phase: "processing" | "submitting";
+    currentStep: number;
+    isComplete: boolean;
+    isWarning: boolean;
+    warningMessage?: string;
+    isError: boolean;
+    errorMessage?: string;
+  }>({
+    active: false,
+    phase: "processing",
+    currentStep: 0,
+    isComplete: false,
+    isWarning: false,
+    isError: false,
+  });
 
   // Signer management
   const [users, setUsers] = useState<UserOption[]>([]);
@@ -54,6 +89,7 @@ export default function UploadDocumentView({
 
   const handleProcessFile = useCallback(async (selectedFile: File) => {
     setErrorMsg(null);
+    setExistingDocId(null);
     const isPdf =
       selectedFile.type === "application/pdf" ||
       selectedFile.name.toLowerCase().endsWith(".pdf");
@@ -65,17 +101,80 @@ export default function UploadDocumentView({
 
     setFile(selectedFile);
     setIsProcessing(true);
+    setWorkflowState({
+      active: true,
+      phase: "processing",
+      currentStep: 0,
+      isComplete: false,
+      isWarning: false,
+      isError: false,
+    });
 
     try {
+      // Step 0: Uploading document / reading binary stream
+      await new Promise((r) => setTimeout(r, 220));
       const buffer = await selectedFile.arrayBuffer();
+
+      // Step 1: Generating Hash
+      setWorkflowState((prev) => ({ ...prev, currentStep: 1 }));
       const hash = await computeDocumentHash(buffer);
       setDocHash(hash);
       if (!title) {
         setTitle(selectedFile.name.replace(/\.[^/.]+$/, ""));
       }
+      await new Promise((r) => setTimeout(r, 240));
+
+      // Step 2: Registry Check
+      setWorkflowState((prev) => ({ ...prev, currentStep: 2 }));
+      let isDuplicate = false;
+      let existingRecord: { id: number; title: string; file_name: string } | null = null;
+
+      try {
+        const docRes = await fetch("/api/documents");
+        if (docRes.ok) {
+          const docData = await docRes.json();
+          const existing = (docData.documents || []).find(
+            (d: { id: number; title: string; file_name: string; document_hash: string; is_owner: boolean }) =>
+              d.is_owner && d.document_hash.toLowerCase() === hash.toLowerCase()
+          );
+          if (existing) {
+            isDuplicate = true;
+            existingRecord = existing;
+            setExistingDocId(existing.id);
+            setErrorMsg(
+              `Document already there: A document with this identical SHA-256 hash has already been uploaded by your account ("${existing.title || existing.file_name}").`
+            );
+          }
+        }
+      } catch (checkErr) {
+        console.warn("Could not pre-check duplicate hash:", checkErr);
+      }
+
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Step 3: Complete or Warning
+      if (isDuplicate) {
+        setWorkflowState((prev) => ({
+          ...prev,
+          currentStep: 2,
+          isWarning: true,
+          warningMessage: `Document already there: A document with this identical SHA-256 hash is already registered in your account.`,
+        }));
+      } else {
+        setWorkflowState((prev) => ({
+          ...prev,
+          currentStep: 3,
+          isComplete: true,
+        }));
+      }
     } catch (err) {
       console.error("Error computing hash:", err);
       setErrorMsg("Failed to compute SHA-256 hash.");
+      setWorkflowState((prev) => ({
+        ...prev,
+        isError: true,
+        errorMessage: "Failed to compute SHA-256 hash.",
+      }));
     } finally {
       setIsProcessing(false);
     }
@@ -129,11 +228,23 @@ export default function UploadDocumentView({
 
     setIsSubmitting(true);
     setErrorMsg(null);
+    setWorkflowState({
+      active: true,
+      phase: "submitting",
+      currentStep: 0,
+      isComplete: false,
+      isWarning: false,
+      isError: false,
+    });
 
     try {
+      // Step 0: Packaging Payload
+      await new Promise((r) => setTimeout(r, 200));
       const buffer = await file.arrayBuffer();
       const fileData = arrayBufferToBase64(buffer);
 
+      // Step 1: Registering Document
+      setWorkflowState((prev) => ({ ...prev, currentStep: 1 }));
       const res = await fetch("/api/documents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -149,8 +260,24 @@ export default function UploadDocumentView({
 
       const data = await res.json();
       if (!res.ok) {
+        if (data.alreadyExists && data.existingDocument?.id) {
+          setExistingDocId(data.existingDocument.id);
+        }
+        setWorkflowState((prev) => ({
+          ...prev,
+          isError: true,
+          errorMessage: data.error || "Failed to create document",
+        }));
         throw new Error(data.error || "Failed to create document");
       }
+
+      // Step 2: Initializing Genesis Audit Chain
+      setWorkflowState((prev) => ({ ...prev, currentStep: 2 }));
+      await new Promise((r) => setTimeout(r, 220));
+
+      // Step 3: Complete
+      setWorkflowState((prev) => ({ ...prev, currentStep: 3, isComplete: true }));
+      await new Promise((r) => setTimeout(r, 250));
 
       onSuccess(data.document.id);
     } catch (err: unknown) {
@@ -175,25 +302,82 @@ export default function UploadDocumentView({
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      {errorMsg && (
+      {/* Workflow Checkpoint Stepper (shown above form once processed or while submitting) */}
+      {workflowState.active && !isProcessing && (
+        <WorkflowStepper
+          steps={
+            workflowState.phase === "processing"
+              ? UPLOAD_PROCESS_STEPS
+              : SUBMIT_PROCESS_STEPS
+          }
+          currentStepIndex={workflowState.currentStep}
+          isComplete={workflowState.isComplete}
+          isError={workflowState.isError}
+          errorMessage={workflowState.errorMessage}
+          isWarning={workflowState.isWarning}
+          warningMessage={workflowState.warningMessage}
+          theme={theme}
+          title={
+            workflowState.phase === "processing"
+              ? "Document Intake & Hashing Pipeline"
+              : "Document Registration Pipeline"
+          }
+          subtitle={
+            workflowState.phase === "processing"
+              ? "Uploading document, calculating SHA-256 digest, and checking registry"
+              : "Securing payload, registering multi-party signers, and generating Genesis audit block"
+          }
+        />
+      )}
+
+      {errorMsg && !isProcessing && (
         <div
-          className={`p-4 rounded-xl border text-xs flex items-center justify-between ${
-            isDark
+          className={`p-4 rounded-xl border text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+            existingDocId
+              ? isDark
+                ? "border-amber-500/40 bg-amber-950/20 text-amber-300"
+                : "border-amber-300 bg-amber-50 text-amber-900"
+              : isDark
               ? "border-rose-500/40 bg-rose-950/20 text-rose-300"
               : "border-rose-200 bg-rose-50 text-rose-700"
           }`}
         >
-          <span>{errorMsg}</span>
-          <button
-            onClick={() => setErrorMsg(null)}
-            className="p-1 hover:text-white"
-          >
-            ×
-          </button>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <span className="font-medium leading-relaxed">{errorMsg}</span>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {existingDocId && (
+              <button
+                type="button"
+                onClick={() => onSuccess(existingDocId)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                  isDark
+                    ? "bg-[#D6D6D6] text-[#0B0909] hover:bg-white shadow-xs"
+                    : "bg-[#0B0909] text-white hover:bg-gray-800 shadow-xs"
+                }`}
+              >
+                View Existing Document
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setErrorMsg(null);
+                setExistingDocId(null);
+              }}
+              className="p-1 hover:opacity-75 cursor-pointer text-base leading-none"
+            >
+              ×
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Drag & Drop Upload Card */}
+      {/* Drag & Drop Upload Card (When no file selected) */}
       {!file ? (
         <div
           onDragOver={handleDragOver}
@@ -251,6 +435,40 @@ export default function UploadDocumentView({
             Only PDF files are supported. Max size 50MB.
           </p>
         </div>
+      ) : isProcessing ? (
+        /* Focused Ingestion & Checkpoint Pipeline Hero Card */
+        <div
+          className={`p-6 sm:p-8 rounded-2xl border transition-all space-y-6 ${
+            isDark
+              ? "bg-[#0B0909] border-[#44444C]/70 shadow-xl"
+              : "bg-white border-[#D6D6D6] shadow-sm"
+          }`}
+        >
+          <div className="flex items-center gap-3.5 pb-4 border-b border-inherit">
+            <div className="w-10 h-10 rounded-xl bg-red-500/10 text-red-500 border border-red-500/20 flex items-center justify-center font-bold text-xs shrink-0">
+              PDF
+            </div>
+            <div>
+              <p className="font-semibold text-sm">{file.name}</p>
+              <p className="text-xs text-[#8C8C8C] mt-0.5">
+                {formatFileSize(file.size)} • Processing bytes...
+              </p>
+            </div>
+          </div>
+
+          <WorkflowStepper
+            steps={UPLOAD_PROCESS_STEPS}
+            currentStepIndex={workflowState.currentStep}
+            isComplete={workflowState.isComplete}
+            isError={workflowState.isError}
+            errorMessage={workflowState.errorMessage}
+            isWarning={workflowState.isWarning}
+            warningMessage={workflowState.warningMessage}
+            theme={theme}
+            title="Document Intake & Hashing Pipeline"
+            subtitle="Uploading document, calculating SHA-256 digest, and checking registry"
+          />
+        </div>
       ) : (
         /* Selected File & Multi-Party Configuration Card */
         <form
@@ -279,6 +497,16 @@ export default function UploadDocumentView({
               onClick={() => {
                 setFile(null);
                 setDocHash("");
+                setErrorMsg(null);
+                setExistingDocId(null);
+                setWorkflowState({
+                  active: false,
+                  phase: "processing",
+                  currentStep: 0,
+                  isComplete: false,
+                  isWarning: false,
+                  isError: false,
+                });
               }}
               className="text-xs text-[#8C8C8C] hover:text-[#D6D6D6] underline cursor-pointer"
             >
@@ -401,9 +629,11 @@ export default function UploadDocumentView({
           <div className="pt-2">
             <button
               type="submit"
-              disabled={isSubmitting || isProcessing}
+              disabled={isSubmitting || isProcessing || !!existingDocId}
               className={`w-full py-3 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer transition-all flex items-center justify-center gap-2 ${
-                isDark
+                existingDocId
+                  ? "bg-amber-500/15 text-amber-400 border border-amber-500/30 cursor-not-allowed"
+                  : isDark
                   ? "bg-[#D6D6D6] text-[#0B0909] hover:bg-white shadow-lg disabled:opacity-50"
                   : "bg-[#0B0909] text-white hover:bg-gray-800 disabled:opacity-50"
               }`}
@@ -416,6 +646,8 @@ export default function UploadDocumentView({
                   </svg>
                   <span>Initializing Cryptographic Workflow...</span>
                 </>
+              ) : existingDocId ? (
+                <span>Document Already There (Upload Blocked)</span>
               ) : (
                 <span>Upload &amp; Request Signatures</span>
               )}

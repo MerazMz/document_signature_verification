@@ -63,3 +63,33 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #8C8C8C;
 }
+
+/* Checkpoint workflow pipeline animations */
+@keyframes pipeline-flow {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-pipeline-flow {
+  animation: pipeline-flow 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@keyframes checkpoint-pop {
+  0% {
+    transform: scale(0.85);
+  }
+  50% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-checkpoint-pop {
+  animation: checkpoint-pop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}

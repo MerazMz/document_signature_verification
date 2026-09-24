@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { DocumentItem } from "./DashboardOverview";
 import { signDocumentHash } from "@/lib/crypto";
 import { useKeyManagement } from "@/hooks/useKeyManagement";
+import WorkflowStepper, { WorkflowStep } from "./WorkflowStepper";
 
 interface SignDocumentViewProps {
   documents: DocumentItem[];
@@ -12,6 +13,14 @@ interface SignDocumentViewProps {
   onSignComplete: (docId: number) => void;
   onNavigateToSettings: () => void;
 }
+
+const SIGN_WORKFLOW_STEPS: WorkflowStep[] = [
+  { id: "key", label: "Access Private Key", sublabel: "Web Crypto client key" },
+  { id: "sign", label: "Generating Signature", sublabel: "ECDSA P-256 + SHA-256" },
+  { id: "verify", label: "Server Verification", sublabel: "Public key validation" },
+  { id: "audit", label: "Audit Log Append", sublabel: "Genesis hash chain" },
+  { id: "complete", label: "Signature Recorded", sublabel: "Legally binding record" },
+];
 
 export default function SignDocumentView({
   documents,
@@ -41,6 +50,20 @@ export default function SignDocumentView({
   const [rejectReason, setRejectReason] = useState("");
   const [copiedHash, setCopiedHash] = useState(false);
   const [feedback, setFeedback] = useState<{ text: string; type: "success" | "error" } | null>(null);
+
+  // Signing Workflow Checkpoint State
+  const [signWorkflowState, setSignWorkflowState] = useState<{
+    active: boolean;
+    currentStep: number;
+    isComplete: boolean;
+    isError: boolean;
+    errorMessage?: string;
+  }>({
+    active: false,
+    currentStep: 0,
+    isComplete: false,
+    isError: false,
+  });
 
   // Inline Key Activation State
   const [showKeyModal, setShowKeyModal] = useState(false);
@@ -106,15 +129,23 @@ export default function SignDocumentView({
     }
 
     setIsSigning(true);
+    setSignWorkflowState({
+      active: true,
+      currentStep: 0,
+      isComplete: false,
+      isError: false,
+    });
 
     try {
+      // Step 0: Access Private Key via Web Crypto API
+      await new Promise((r) => setTimeout(r, 220));
       const privateKey = await getActivePrivateKey();
       if (!privateKey) {
         setShowKeyModal(true);
         throw new Error("ECDSA private key not accessible. Please enter password to unlock.");
       }
 
-      // 2. Fetch key ID from backend
+      // Fetch key ID from backend
       const keyRes = await fetch("/api/keys");
       const keyData = await keyRes.json();
       if (!keyRes.ok || !keyData.key) {
@@ -123,10 +154,13 @@ export default function SignDocumentView({
       }
       const keyId = keyData.key.id;
 
-      // 3. Client-side signature using Web Crypto API
+      // Step 1: Client-side ECDSA P-256 signature calculation
+      setSignWorkflowState((prev) => ({ ...prev, currentStep: 1 }));
+      await new Promise((r) => setTimeout(r, 260));
       const signatureBase64 = await signDocumentHash(privateKey, selectedDoc.document_hash);
 
-      // 4. Send signature to backend for cryptographic verification
+      // Step 2: Send signature to backend for cryptographic verification
+      setSignWorkflowState((prev) => ({ ...prev, currentStep: 2 }));
       const res = await fetch(`/api/documents/${selectedDoc.id}/sign`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -142,6 +176,14 @@ export default function SignDocumentView({
         throw new Error(resData.error || "Cryptographic signature rejected by server");
       }
 
+      // Step 3: Append signature to tamper-evident audit chain
+      setSignWorkflowState((prev) => ({ ...prev, currentStep: 3 }));
+      await new Promise((r) => setTimeout(r, 220));
+
+      // Step 4: Signature Recorded & Complete!
+      setSignWorkflowState((prev) => ({ ...prev, currentStep: 4, isComplete: true }));
+      await new Promise((r) => setTimeout(r, 260));
+
       setFeedback({
         type: "success",
         text: "Document signed successfully with ECDSA P-256! Signature cryptographically verified and recorded.",
@@ -150,10 +192,16 @@ export default function SignDocumentView({
       onSignComplete(selectedDoc.id);
     } catch (err: unknown) {
       console.error("Signing failed:", err);
+      const msg = err instanceof Error ? err.message : "Failed to sign document";
       setFeedback({
         type: "error",
-        text: err instanceof Error ? err.message : "Failed to sign document",
+        text: msg,
       });
+      setSignWorkflowState((prev) => ({
+        ...prev,
+        isError: true,
+        errorMessage: msg,
+      }));
     } finally {
       setIsSigning(false);
     }
@@ -222,6 +270,20 @@ export default function SignDocumentView({
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
+      {/* Signing Workflow Checkpoint Pipeline */}
+      {signWorkflowState.active && (
+        <WorkflowStepper
+          steps={SIGN_WORKFLOW_STEPS}
+          currentStepIndex={signWorkflowState.currentStep}
+          isComplete={signWorkflowState.isComplete}
+          isError={signWorkflowState.isError}
+          errorMessage={signWorkflowState.errorMessage}
+          theme={theme}
+          title="ECDSA Cryptographic Signing Pipeline"
+          subtitle="Signing document hash client-side with ECDSA P-256 and recording to tamper-evident audit trail"
+        />
+      )}
+
       {/* Feedback Alert */}
       {feedback && (
         <div
@@ -249,7 +311,16 @@ export default function SignDocumentView({
             return (
               <button
                 key={doc.id}
-                onClick={() => setSelectedDocId(doc.id)}
+                onClick={() => {
+                  setSelectedDocId(doc.id);
+                  setFeedback(null);
+                  setSignWorkflowState({
+                    active: false,
+                    currentStep: 0,
+                    isComplete: false,
+                    isError: false,
+                  });
+                }}
                 className={`px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
                   isSelected
                     ? isDark
